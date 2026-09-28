@@ -4,14 +4,14 @@ Agent 接入 (Claude Desktop mcp.json):
   "x402-arc": {"command": "python3", "args": ["/root/x402_mcp.py"]}
 环境变量:
   X402_MCP_KEY   付款钱包私钥 (默认 keys/tapeout_hot.json)
-  X402_MCP_URL   服务端点 (默认读 /root/x402_tunnel_url.txt)
+  X402_MCP_URL   服务端点 (默认 https://api.percall.io)
 """
 import sys, json, os, time, base64
 
 sys.path.insert(0, '/root/crypto-bugs/scripts')
 import cctp_transfer as CT
 
-ENDPOINT = os.environ.get('X402_MCP_URL', open('/root/x402_tunnel_url.txt').read().strip()).rstrip('/')
+ENDPOINT = os.environ.get('X402_MCP_URL', 'https://api.percall.io').rstrip('/')
 
 def _load_key():
     k = os.environ.get('X402_MCP_KEY')

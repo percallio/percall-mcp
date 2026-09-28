@@ -89,6 +89,33 @@ def _call_x402(method, params, free=False):
         r = urllib.request.urlopen(urllib.request.Request(ENDPOINT + '/arc/', data=body, headers=headers), timeout=30)
         return json.loads(r.read().decode())
 
+def _early_call(params, free=False):
+    """/early 监控快照 (非 JSON-RPC 端点, 同样 x402 舞蹈)"""
+    import urllib.request, urllib.error
+    body = json.dumps(params or {}).encode()
+    headers = {'Content-Type': 'application/json', 'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) percall-mcp/1.0'}
+    if free:
+        headers['X-From'] = PAYER
+    rq = urllib.request.Request(ENDPOINT + '/early', data=body, headers=headers)
+    try:
+        r = urllib.request.urlopen(rq, timeout=60)
+        return json.loads(r.read().decode())
+    except urllib.error.HTTPError as e:
+        if e.code != 402 or free:
+            return {'error': 'http %s: %s' % (e.code, e.read().decode()[:200])}
+        j = json.loads(e.read().decode())
+        ac = j['accepts'][0]
+        auth = {'from': PAYER, 'to': ac['payTo'], 'value': ac['maxAmountRequired'],
+                'validAfter': '0', 'validBefore': str(int(time.time()) + 600),
+                'nonce': '0x' + os.urandom(32).hex()}
+        r_, s_, v = CT.ec_sign(_auth_hash(auth), int(PK.replace('0x', ''), 16))
+        pay = {'x402Version': 2, 'scheme': ac['scheme'], 'network': ac['network'],
+               'payload': dict(auth, r=hex(r_), s=hex(s_), v=27 + int(v))}
+        headers['X-PAYMENT'] = base64.urlsafe_b64encode(json.dumps(pay).encode()).decode()
+        rq = urllib.request.Request(ENDPOINT + '/early', data=body, headers=headers)
+        r = urllib.request.urlopen(rq, timeout=90)
+        return json.loads(r.read().decode())
+
 TOOLS = [
     {'name': 'arc_block_number', 'description': 'Latest Arc mainnet block number (chainId 5042, ~1s blocks, USDC gas). $0.002 USDC.',
      'inputSchema': {'type': 'object', 'properties': {}}},
@@ -102,6 +129,8 @@ TOOLS = [
      'inputSchema': {'type': 'object', 'properties': {'address': {'type': 'string'}}, 'required': ['address']}},
     {'name': 'arc_free', 'description': 'Free-tier call (50/day, no payment). method+params = raw JSON-RPC.',
      'inputSchema': {'type': 'object', 'properties': {'method': {'type': 'string'}, 'params': {'type': 'array'}}, 'required': ['method']}},
+    {'name': 'arc_early_watch', 'description': 'Monitoring snapshot. $0.01 USDC (free tier first): latest Arc block + its transactions; optional `address` + `window` (10-300s) to list txs touching that address in the window. Use for activity/balance watching.',
+     'inputSchema': {'type': 'object', 'properties': {'address': {'type': 'string', 'description': '0x address to watch'}, 'window': {'type': 'integer', 'description': 'watch window seconds (10-300)'}}}},
 ]
 
 def tool_call(name, args):
@@ -125,6 +154,13 @@ def tool_call(name, args):
             r = _call_x402('eth_getBalance', [args['address'], 'latest'])
         elif name == 'arc_free':
             r = _call_x402(args['method'], args.get('params', []), free=True)
+        elif name == 'arc_early_watch':
+            p = {}
+            if args.get('address'):
+                p['address'] = args['address']
+            if args.get('window'):
+                p['window'] = int(args['window'])
+            r = _early_call(p)
         else:
             r = {'error': 'unknown tool ' + name}
         return [{'type': 'text', 'text': json.dumps(r)[:8000]}]

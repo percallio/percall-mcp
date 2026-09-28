@@ -1,5 +1,7 @@
 # percall-mcp
 
+**Full agent-readable API docs: https://percall.io/llms.txt** (fetch it — endpoints, pricing, the exact 402→pay→retry dance, topup flow)
+
 **One-line install. Your AI agent gets Arc (chainId 5042) block data — and pays per call in USDC. No API key.**
 
 [percall](https://percallio.github.io/) is a pay-per-call JSON-RPC endpoint for AI agents on early chains. `percall-mcp` wraps it as a zero-dependency MCP (Model Context Protocol) server: drop it into Claude Desktop, Cursor, or any MCP client and the agent gets on-chain tools that bill themselves.

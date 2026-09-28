@@ -51,7 +51,7 @@ def _auth_hash(auth):
 def _rpc(method, params, pay):
     import urllib.request
     body = json.dumps({'jsonrpc': '2.0', 'id': 1, 'method': method, 'params': params}).encode()
-    headers = {'Content-Type': 'application/json'}
+    headers = {'Content-Type': 'application/json', 'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) percall-mcp/1.0'}
     if pay:
         c = json.loads(urllib.request.urlopen(urllib.request.Request(ENDPOINT + '/arc/', data=body, headers=headers), timeout=20).read())
     else:
@@ -68,7 +68,7 @@ def _rpc(method, params, pay):
 def _call_x402(method, params, free=False):
     import urllib.request, urllib.error
     body = json.dumps({'jsonrpc': '2.0', 'id': 1, 'method': method, 'params': params}).encode()
-    headers = {'Content-Type': 'application/json'}
+    headers = {'Content-Type': 'application/json', 'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) percall-mcp/1.0'}
     if free:
         headers['X-From'] = PAYER
     try:

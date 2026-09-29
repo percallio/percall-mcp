@@ -135,6 +135,14 @@ TOOLS = [
      'inputSchema': {'type': 'object', 'properties': {'address': {'type': 'string', 'description': '0x address to watch'}, 'window': {'type': 'integer', 'description': 'window seconds (10-3600, default 60)'}}}},
     {'name': 'arc_audit', 'description': 'Token hygiene check. $0.02 USDC (free tier first): name/symbol/decimals/supply, owner + renounced, proxy/upgradeable, 1h volume, risk flags, verdict pass/warn/fail.',
      'inputSchema': {'type': 'object', 'properties': {'address': {'type': 'string', 'description': 'token contract 0x..'}}, 'required': ['address']}},
+    {'name': 'arc_whales', 'description': 'Top 20 USDC flow addresses on Arc in a window (1h default, max 24h). Bridge/DEX/whale detection. $0.005 USDC (free tier first). Served from a rolling buffer, sub-second.',
+     'inputSchema': {'type': 'object', 'properties': {'window': {'type': 'integer', 'description': 'window seconds (60-86400, default 3600)'}}}},
+    {'name': 'arc_deployments', 'description': 'New smart contract deployments on Arc in a window (1h default). Early-stage token/contract discovery feed. $0.01 USDC (free tier first).',
+     'inputSchema': {'type': 'object', 'properties': {'window': {'type': 'integer', 'description': 'window seconds (60-86400, default 3600)'}}}},
+    {'name': 'arc_wallet_report', 'description': 'Address risk/flow profile report. $0.05 USDC (free tier first): USDC balance + window in/out flows + top 5 counterparties (with contract check) + risk flags (dormant/high-volume/large-balance/contract-counterparties). One call replaces ~8 RPC round-trips.',
+     'inputSchema': {'type': 'object', 'properties': {'address': {'type': 'string', 'description': '0x address'}, 'window': {'type': 'integer', 'description': 'window seconds (60-86400, default 86400)'}}, 'required': ['address']}},
+    {'name': 'arc_token_report', 'description': 'Full token report. $0.05 USDC (free tier first): everything in arc_audit plus top-10 recipient holders and flow concentration (top10 share).',
+     'inputSchema': {'type': 'object', 'properties': {'address': {'type': 'string', 'description': 'token contract 0x..'}}, 'required': ['address']}},
 ]
 
 def tool_call(name, args):
@@ -172,6 +180,23 @@ def tool_call(name, args):
             r = _data_call('/alerts', p)
         elif name == 'arc_audit':
             r = _data_call('/audit', {'address': args['address']})
+        elif name == 'arc_whales':
+            p = {}
+            if args.get('window'):
+                p['window'] = int(args['window'])
+            r = _data_call('/whales', p)
+        elif name == 'arc_deployments':
+            p = {}
+            if args.get('window'):
+                p['window'] = int(args['window'])
+            r = _data_call('/deployments', p)
+        elif name == 'arc_wallet_report':
+            p = {'address': args['address']}
+            if args.get('window'):
+                p['window'] = int(args['window'])
+            r = _data_call('/wallet-report', p)
+        elif name == 'arc_token_report':
+            r = _data_call('/token-report', {'address': args['address']})
         else:
             r = {'error': 'unknown tool ' + name}
         return [{'type': 'text', 'text': json.dumps(r)[:8000]}]

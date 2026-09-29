@@ -89,14 +89,14 @@ def _call_x402(method, params, free=False):
         r = urllib.request.urlopen(urllib.request.Request(ENDPOINT + '/arc/', data=body, headers=headers), timeout=30)
         return json.loads(r.read().decode())
 
-def _early_call(params, free=False):
-    """/early 监控快照 (非 JSON-RPC 端点, 同样 x402 舞蹈)"""
+def _data_call(path, params, free=False):
+    """数据端点 (/early /alerts /audit): 非 JSON-RPC, 同样 x402 舞蹈"""
     import urllib.request, urllib.error
     body = json.dumps(params or {}).encode()
     headers = {'Content-Type': 'application/json', 'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) percall-mcp/1.0'}
     if free:
         headers['X-From'] = PAYER
-    rq = urllib.request.Request(ENDPOINT + '/early', data=body, headers=headers)
+    rq = urllib.request.Request(ENDPOINT + path, data=body, headers=headers)
     try:
         r = urllib.request.urlopen(rq, timeout=60)
         return json.loads(r.read().decode())
@@ -112,7 +112,7 @@ def _early_call(params, free=False):
         pay = {'x402Version': 2, 'scheme': ac['scheme'], 'network': ac['network'],
                'payload': dict(auth, r=hex(r_), s=hex(s_), v=27 + int(v))}
         headers['X-PAYMENT'] = base64.urlsafe_b64encode(json.dumps(pay).encode()).decode()
-        rq = urllib.request.Request(ENDPOINT + '/early', data=body, headers=headers)
+        rq = urllib.request.Request(ENDPOINT + path, data=body, headers=headers)
         r = urllib.request.urlopen(rq, timeout=90)
         return json.loads(r.read().decode())
 
@@ -129,8 +129,12 @@ TOOLS = [
      'inputSchema': {'type': 'object', 'properties': {'address': {'type': 'string'}}, 'required': ['address']}},
     {'name': 'arc_free', 'description': 'Free-tier call (50/day, no payment). method+params = raw JSON-RPC.',
      'inputSchema': {'type': 'object', 'properties': {'method': {'type': 'string'}, 'params': {'type': 'array'}}, 'required': ['method']}},
-    {'name': 'arc_early_watch', 'description': 'Monitoring snapshot. $0.01 USDC (free tier first): latest Arc block + its transactions; optional `address` + `window` (10-300s) to list txs touching that address in the window. Use for activity/balance watching.',
+    {'name': 'arc_early_watch', 'description': 'Monitoring snapshot. $0.01 USDC (free tier first): latest Arc block + its transactions; optional `address` + `window` (10-300s) to list USDC flows touching that address in the window. Use for activity watching.',
      'inputSchema': {'type': 'object', 'properties': {'address': {'type': 'string', 'description': '0x address to watch'}, 'window': {'type': 'integer', 'description': 'watch window seconds (10-300)'}}}},
+    {'name': 'arc_alerts', 'description': 'Address USDC delta feed. $0.005 USDC (free tier first): USDC in/out transfers + live balance over a window. Built for 30-60s polling to watch a wallet.',
+     'inputSchema': {'type': 'object', 'properties': {'address': {'type': 'string', 'description': '0x address to watch'}, 'window': {'type': 'integer', 'description': 'window seconds (10-3600, default 60)'}}}},
+    {'name': 'arc_audit', 'description': 'Token hygiene check. $0.02 USDC (free tier first): name/symbol/decimals/supply, owner + renounced, proxy/upgradeable, 1h volume, risk flags, verdict pass/warn/fail.',
+     'inputSchema': {'type': 'object', 'properties': {'address': {'type': 'string', 'description': 'token contract 0x..'}}, 'required': ['address']}},
 ]
 
 def tool_call(name, args):
@@ -160,7 +164,14 @@ def tool_call(name, args):
                 p['address'] = args['address']
             if args.get('window'):
                 p['window'] = int(args['window'])
-            r = _early_call(p)
+            r = _data_call('/early', p)
+        elif name == 'arc_alerts':
+            p = {'address': args['address']}
+            if args.get('window'):
+                p['window'] = int(args['window'])
+            r = _data_call('/alerts', p)
+        elif name == 'arc_audit':
+            r = _data_call('/audit', {'address': args['address']})
         else:
             r = {'error': 'unknown tool ' + name}
         return [{'type': 'text', 'text': json.dumps(r)[:8000]}]

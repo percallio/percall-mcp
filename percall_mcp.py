@@ -8,8 +8,17 @@ Agent 接入 (Claude Desktop mcp.json):
 """
 import sys, json, os, time, base64
 
-sys.path.insert(0, '/root/crypto-bugs/scripts')
-import cctp_transfer as CT
+_HERE = os.path.dirname(os.path.abspath(__file__))
+if _HERE not in sys.path:
+    sys.path.insert(0, _HERE)
+try:
+    import cctp_transfer as CT
+except ImportError:
+    try:
+        sys.path.append('/root/crypto-bugs/scripts')
+        import cctp_transfer as CT
+    except ImportError:
+        CT = None
 
 ENDPOINT = os.environ.get('X402_MCP_URL', 'https://api.percall.io').rstrip('/')
 
@@ -17,10 +26,24 @@ def _load_key():
     k = os.environ.get('X402_MCP_KEY')
     if k:
         return k
-    d = json.load(open('/root/crypto-bugs/data/keys/tapeout_hot.json'))
-    return (d.get('privateKey') or d.get('private_key') or d.get('pk') or d.get('key'))
+    for p in (os.path.join(_HERE, 'keys', 'tapeout_hot.json'),
+              '/root/crypto-bugs/data/keys/tapeout_hot.json'):
+        try:
+            d = json.load(open(p))
+            kk = (d.get('privateKey') or d.get('private_key') or d.get('pk') or d.get('key'))
+            if kk:
+                return kk
+        except Exception:
+            pass
+    return None
 
 PK = _load_key()
+PAYER = None
+if PK:
+    try:
+        PAYER = _addr(PK)
+    except Exception:
+        PAYER = None
 
 def _addr(pk_hex):
     pk = int(pk_hex.replace('0x', ''), 16)
@@ -69,7 +92,7 @@ def _call_x402(method, params, free=False):
     import urllib.request, urllib.error
     body = json.dumps({'jsonrpc': '2.0', 'id': 1, 'method': method, 'params': params}).encode()
     headers = {'Content-Type': 'application/json', 'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) percall-mcp/1.0'}
-    if free:
+    if free and PAYER:
         headers['X-From'] = PAYER
     try:
         r = urllib.request.urlopen(urllib.request.Request(ENDPOINT + '/arc/', data=body, headers=headers), timeout=30)
@@ -79,6 +102,8 @@ def _call_x402(method, params, free=False):
             return {'error': 'http %s: %s' % (e.code, e.read().decode()[:200])}
         j = json.loads(e.read().decode())
         ac = j['accepts'][0]
+        if not PK or CT is None:
+            return {'error': 'X402_MCP_KEY not set (wallet private key needed to pay per call via x402)'}
         auth = {'from': PAYER, 'to': ac['payTo'], 'value': ac['maxAmountRequired'],
                 'validAfter': '0', 'validBefore': str(int(time.time()) + 600),
                 'nonce': '0x' + os.urandom(32).hex()}
@@ -94,7 +119,7 @@ def _data_call(path, params, free=False):
     import urllib.request, urllib.error
     body = json.dumps(params or {}).encode()
     headers = {'Content-Type': 'application/json', 'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) percall-mcp/1.0'}
-    if free:
+    if free and PAYER:
         headers['X-From'] = PAYER
     rq = urllib.request.Request(ENDPOINT + path, data=body, headers=headers)
     try:
@@ -105,6 +130,8 @@ def _data_call(path, params, free=False):
             return {'error': 'http %s: %s' % (e.code, e.read().decode()[:200])}
         j = json.loads(e.read().decode())
         ac = j['accepts'][0]
+        if not PK or CT is None:
+            return {'error': 'X402_MCP_KEY not set (wallet private key needed to pay per call via x402)'}
         auth = {'from': PAYER, 'to': ac['payTo'], 'value': ac['maxAmountRequired'],
                 'validAfter': '0', 'validBefore': str(int(time.time()) + 600),
                 'nonce': '0x' + os.urandom(32).hex()}

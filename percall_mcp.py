@@ -196,6 +196,8 @@ TOOLS = [
      'inputSchema': {'type': 'object', 'properties': {'chain': {'type': 'string', 'enum': ['solana', 'base', 'bsc', 'arc', 'all'], 'description': 'default all'}, 'limit': {'type': 'integer', 'description': '1-200, default 50'}}}},
     {'name': 'deployer_profile', 'description': 'Deployer profile (Arc D+0 radar). $0.02 USDC (free tier first): deployment count + contracts (with age) from the ~25h rolling buffer, first-seen age, d0 flag (fresh deployer = first deploy within last 10 min), wallet native balance + tx count. Use for early deployer tracking / D+0 token signals.',
      'inputSchema': {'type': 'object', 'properties': {'deployer': {'type': 'string', 'description': 'deployer 0x address'}}, 'required': ['deployer']}},
+    {'name': 'x402_market_stats', 'description': 'x402 market stats: USDC incoming flow to a service payTo address over a window on base/arc: total_usdc, tx_count, unique_payers, top_payers, recent txs. x402 services are pay-per-call, so incoming USDC = agent payment demand (who is paying which data service). $0.01 USDC (free tier first).',
+     'inputSchema': {'type': 'object', 'properties': {'address': {'type': 'string', 'description': 'service payTo address (0x..)'}, 'chain': {'type': 'string', 'enum': ['base', 'arc'], 'description': 'default base'}, 'hours': {'type': 'integer', 'description': '1-72, default 24'}}, 'required': ['address']}},
 ]
 
 def tool_call(name, args):
@@ -287,6 +289,12 @@ def tool_call(name, args):
             r = _data_call('/meme', p)
         elif name == 'deployer_profile':
             r = _data_call('/deployer', {'deployer': args['deployer']})
+        elif name == 'x402_market_stats':
+            ch = str(args.get('chain') or 'base').lower()
+            p = {'address': args['address'], 'chain': ch, 'network': ch}
+            if args.get('hours'):
+                p['hours'] = int(args['hours'])
+            r = _data_call('/x402/stats', p)
         else:
             r = {'error': 'unknown tool ' + name}
         return [{'type': 'text', 'text': json.dumps(r)[:8000]}]

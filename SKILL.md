@@ -1,6 +1,6 @@
 ---
 name: percall
-description: Keyless pay-per-call data on Arc mainnet (chainId 5042) for agents — JSON-RPC, USDC flows, token audits, wallet reports, whale & deployment feeds. No API key; the agent pays per call in USDC via x402. Use when you need Arc on-chain data and don't want to manage RPC keys, rate limits, or accounts.
+description: Keyless pay-per-call on-chain data for agents on Arc mainnet (chainId 5042) and Base (chainId 8453) — JSON-RPC, USDC flows, token audits, wallet reports, whale & deployment feeds, plus memecoin trending with live model scores (S/T/rug) and token USD quotes. No API key; the agent pays per call in USDC via x402. Use when you need Arc/Base on-chain data or memecoin signal and don't want to manage RPC keys, rate limits, or accounts.
 ---
 
 # percall — pay-per-call Arc mainnet data for agents
@@ -14,11 +14,11 @@ percall (`https://api.percall.io`) is a keyless x402 gateway to Arc mainnet (cha
 - You need a one-call token hygiene report or an address risk/flow profile instead of assembling 8+ RPC round-trips.
 - Free alternatives exist but require keys, projects, approvals, or are flaky on this new chain.
 
-Do NOT use for other chains (it's Arc-only), or when you already hold a cheap dedicated Arc RPC key for very high volume (the prepaid pack is still the better deal then — see below).
+Do NOT use when you already hold a cheap dedicated RPC key for very high volume (the prepaid pack is still the better deal then — see below). Chains covered: Arc + Base (JSON-RPC); memecoin data tools cover solana/base/bsc/arc.
 
 ## Setup (MCP, recommended)
 
-percall ships a stdio MCP server (13 tools) that handles the x402 payment dance automatically. The only requirement: an EOA wallet holding USDC on Arc (gasless — USDC is the native gas token).
+percall ships a stdio MCP server (22 tools) that handles the x402 payment dance automatically. The only requirement: an EOA wallet holding USDC on Arc (Arc calls; USDC is the native gas token) and on Base for Base calls.
 
 1. Create/import an EOA (any tool: cast, web3, etc.). Fund it with USDC on Arc (chainId 5042).
 2. Register the MCP server with your agent host (Claude Desktop / Claude Code / any MCP client):
@@ -38,13 +38,13 @@ percall ships a stdio MCP server (13 tools) that handles the x402 payment dance 
 }
 ```
 
-3. Tools available: `arc_block_number`, `arc_call`, `arc_get_logs`, `arc_get_balance`, `arc_get_receipt`, `arc_get_block`, `arc_early_watch`, `arc_alerts`, `arc_audit`, `arc_whales`, `arc_deployments`, `arc_wallet_report`, `arc_token_report`.
+3. Tools available (22): Arc RPC `arc_block_number`/`arc_call`/`arc_get_transaction_receipt`/`arc_get_logs`/`arc_balance`/`arc_free`; Base RPC `base_block_number`/`base_call`/`base_get_transaction_receipt`/`base_get_logs`/`base_balance`/`base_free`; monitoring & reports `arc_early_watch`/`arc_alerts`/`arc_audit`/`arc_whales`/`arc_deployments`/`arc_wallet_report`/`arc_token_report`; memecoin data `token_score`/`token_price`/`trending_memes`.
 
 ## Paying
 
 - Each tool call: the server sends the request, receives an HTTP 402 challenge, signs a USDC `transferWithAuthorization` (EIP-712), and retries with the payment header. You (the agent) don't see the dance; the tool returns the result.
 - **Free tier**: 50 free calls/day per wallet (`X-From` header, handled by the MCP server). No wallet needed to start testing.
-- **Prepaid**: one `POST /topup` TWA of $1–$100 buys perpetual off-chain credits; the **weekly pack is $5 = 1,666 standard calls** (7-day TTL, stackable) — best margin for steady usage.
+- **Prepaid**: one `POST /topup` TWA of $1–$100 buys perpetual off-chain credits; the **weekly pack is $5 = 1,666 standard calls** (7-day TTL) and the **monthly pack is $20 = 6,666 standard calls** (30-day TTL, for steady-state agent polling), both stackable — best margin for steady usage.
 - Machine-readable price list: `GET https://api.percall.io/plans`. Discovery manifest: `GET https://api.percall.io/x402.json`.
 
 ## Endpoints & pricing (USDC per call)
@@ -52,6 +52,7 @@ percall ships a stdio MCP server (13 tools) that handles the x402 payment dance 
 | Endpoint | Price | What you get |
 |---|---|---|
 | `POST /arc` (JSON-RPC) | 0.002–0.005 by method; batch per-item capped 0.05 | raw Arc RPC |
+| `POST /base` (JSON-RPC) | 0.002–0.005 by method | raw Base RPC (chainId 8453, main x402 chain) |
 | `GET /early?address=&window=` | 0.01 | latest block + txs; optional window watch |
 | `GET /alerts?address=&window=` | 0.005 | address USDC in/out flows + balance (sub-second, polling-friendly) |
 | `GET /audit?address=` | 0.02 | token hygiene: metadata, owner, proxy, 1h volume, flags, verdict |
@@ -59,6 +60,9 @@ percall ships a stdio MCP server (13 tools) that handles the x402 payment dance 
 | `GET /deployments?window=` | 0.01 | new contract deployments in window (early token discovery) |
 | `GET /wallet-report?address=&window=` | 0.05 | address risk/flow profile: balance + flows + top-5 counterparties (contract-checked) + flags — one call replaces ~8 RPC round-trips |
 | `GET /token-report?address=` | 0.05 | full token report: audit + top-10 recipients + flow concentration |
+| `GET /meme?chain=&limit=` | 0.01 | trending memecoins per chain (GMGN) + live model scores S/T/rug (solana/base/bsc/arc) |
+| `GET /score?address=&chain=` | 0.01 | model score for one token: S/T/rug + verdict (strong/watch/neutral/risky) |
+| `GET /price?address=&chain=` | 0.005 | live USD quote from top pool (all chains): price + 1h/6h/24h + volume + liquidity |
 
 ## Pitfalls
 

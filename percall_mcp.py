@@ -48,20 +48,32 @@ if PK:
 def _addr(pk_hex):
     pk = int(pk_hex.replace('0x', ''), 16)
     Q = CT._pt_mul(pk, (CT.Gx, CT.Gy))
-    import hashlib
     k = CT.keccak256(Q[0].to_bytes(32, 'big') + Q[1].to_bytes(32, 'big'))
     return '0x' + k[-20:].hex()
 
 PAYER = _addr(PK)
 
-# EIP-712 (与 proxy 完全一致)
-_EIP712_DOMAIN = CT.keccak256(
-    CT.keccak256(b'EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)')
-    + CT.keccak256(b'USDC') + CT.keccak256(b'2')
-    + (5042).to_bytes(32, 'big') + bytes(12) + bytes.fromhex('3600000000000000000000000000000000000000'))
+# EIP-712 (与 proxy 完全一致; Arc domain version=2, Base domain version=1)
+_EIP712_TYPEHASH = CT.keccak256(
+    b'EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)')
 _TWH = CT.keccak256(b'TransferWithAuthorization(address from,address to,uint256 value,uint256 validAfter,uint256 validBefore,bytes32 nonce)')
 
-def _auth_hash(auth):
+def _domain_hash(chain_id, version, usdc):
+    return CT.keccak256(_EIP712_TYPEHASH + CT.keccak256(b'USDC') + CT.keccak256(version.encode())
+                        + chain_id.to_bytes(32, 'big') + bytes(12) + bytes.fromhex(usdc[2:]))
+
+_EIP712_DOMAIN_ARC = _domain_hash(5042, _CHAINS['arc']['version'], _CHAINS['arc']['usdc'])
+_EIP712_DOMAIN_BASE = _domain_hash(8453, _CHAINS['base']['version'], _CHAINS['base']['usdc'])
+
+def _domain_for_network(network):
+    """402 challenge 的 network (CAIP-2, eip155:5042 / eip155:8453) -> EIP-712 domain"""
+    try:
+        cid = int(str(network).rsplit(':', 1)[-1])
+    except Exception:
+        cid = 5042
+    return _EIP712_DOMAIN_BASE if cid == 8453 else _EIP712_DOMAIN_ARC
+
+def _auth_hash(auth, domain):
     b = _TWH
     for a in (auth['from'], auth['to']):
         b += bytes(12) + bytes.fromhex(a[2:].lower())
@@ -69,33 +81,21 @@ def _auth_hash(auth):
         b += int(str(auth.get(k, '0')), 10).to_bytes(32, 'big')
     nonce = auth['nonce']
     b += bytes.fromhex(nonce[2:] if nonce.startswith('0x') else nonce)
-    return CT.keccak256(b'\x19\x01' + _EIP712_DOMAIN + CT.keccak256(b))
+    return CT.keccak256(b'\x19\x01' + domain + CT.keccak256(b))
 
-def _rpc(method, params, pay):
+def _post(path, body, headers, timeout=30):
     import urllib.request
-    body = json.dumps({'jsonrpc': '2.0', 'id': 1, 'method': method, 'params': params}).encode()
-    headers = {'Content-Type': 'application/json', 'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) percall-mcp/1.0'}
-    if pay:
-        c = json.loads(urllib.request.urlopen(urllib.request.Request(ENDPOINT + '/arc/', data=body, headers=headers), timeout=20).read())
-    else:
-        rq = urllib.request.Request(ENDPOINT + '/arc/', data=body, headers=headers)
-        try:
-            r = urllib.request.urlopen(rq, timeout=25)
-            return json.loads(r.read().decode())
-        except Exception as e:
-            return {'error': str(e)}
-    rq = urllib.request.Request(ENDPOINT + '/arc/', data=body, headers=headers)
-    r = urllib.request.urlopen(rq, timeout=25)
-    return json.loads(r.read().decode())
+    return urllib.request.urlopen(urllib.request.Request(path, data=body, headers=headers), timeout=timeout)
 
-def _call_x402(method, params, free=False):
+def _call_x402(method, params, free=False, chain='arc'):
     import urllib.request, urllib.error
+    c = _CHAINS[chain]
     body = json.dumps({'jsonrpc': '2.0', 'id': 1, 'method': method, 'params': params}).encode()
-    headers = {'Content-Type': 'application/json', 'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) percall-mcp/1.0'}
-    if free and PAYER:
+    headers = {'Content-Type': 'application/json', 'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) percall-mcp/1.1'}
+    if free:
         headers['X-From'] = PAYER
     try:
-        r = urllib.request.urlopen(urllib.request.Request(ENDPOINT + '/arc/', data=body, headers=headers), timeout=30)
+        r = _post(ENDPOINT + c['path'], body, headers)
         return json.loads(r.read().decode())
     except urllib.error.HTTPError as e:
         if e.code != 402 or free:
@@ -107,23 +107,22 @@ def _call_x402(method, params, free=False):
         auth = {'from': PAYER, 'to': ac['payTo'], 'value': ac['maxAmountRequired'],
                 'validAfter': '0', 'validBefore': str(int(time.time()) + 600),
                 'nonce': '0x' + os.urandom(32).hex()}
-        r_, s_, v = CT.ec_sign(_auth_hash(auth), int(PK.replace('0x', ''), 16))
+        r_, s_, v = CT.ec_sign(_auth_hash(auth, _domain_for_network(ac['network'])), int(PK.replace('0x', ''), 16))
         pay = {'x402Version': 2, 'scheme': ac['scheme'], 'network': ac['network'],
                'payload': dict(auth, r=hex(r_), s=hex(s_), v=27 + int(v))}
         headers['X-PAYMENT'] = base64.urlsafe_b64encode(json.dumps(pay).encode()).decode()
-        r = urllib.request.urlopen(urllib.request.Request(ENDPOINT + '/arc/', data=body, headers=headers), timeout=30)
+        r = _post(ENDPOINT + c['path'], body, headers)
         return json.loads(r.read().decode())
 
 def _data_call(path, params, free=False):
-    """数据端点 (/early /alerts /audit): 非 JSON-RPC, 同样 x402 舞蹈"""
+    """数据端点 (/early /alerts /audit /meme /score /price): 非 JSON-RPC, 同样 x402 舞蹈"""
     import urllib.request, urllib.error
     body = json.dumps(params or {}).encode()
-    headers = {'Content-Type': 'application/json', 'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) percall-mcp/1.0'}
-    if free and PAYER:
+    headers = {'Content-Type': 'application/json', 'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) percall-mcp/1.1'}
+    if free:
         headers['X-From'] = PAYER
-    rq = urllib.request.Request(ENDPOINT + path, data=body, headers=headers)
     try:
-        r = urllib.request.urlopen(rq, timeout=60)
+        r = _post(ENDPOINT + path, body, headers, timeout=60)
         return json.loads(r.read().decode())
     except urllib.error.HTTPError as e:
         if e.code != 402 or free:
@@ -135,12 +134,11 @@ def _data_call(path, params, free=False):
         auth = {'from': PAYER, 'to': ac['payTo'], 'value': ac['maxAmountRequired'],
                 'validAfter': '0', 'validBefore': str(int(time.time()) + 600),
                 'nonce': '0x' + os.urandom(32).hex()}
-        r_, s_, v = CT.ec_sign(_auth_hash(auth), int(PK.replace('0x', ''), 16))
+        r_, s_, v = CT.ec_sign(_auth_hash(auth, _domain_for_network(ac['network'])), int(PK.replace('0x', ''), 16))
         pay = {'x402Version': 2, 'scheme': ac['scheme'], 'network': ac['network'],
                'payload': dict(auth, r=hex(r_), s=hex(s_), v=27 + int(v))}
         headers['X-PAYMENT'] = base64.urlsafe_b64encode(json.dumps(pay).encode()).decode()
-        rq = urllib.request.Request(ENDPOINT + path, data=body, headers=headers)
-        r = urllib.request.urlopen(rq, timeout=90)
+        r = _post(ENDPOINT + path, body, headers, timeout=90)
         return json.loads(r.read().decode())
 
 TOOLS = [
@@ -154,7 +152,19 @@ TOOLS = [
      'inputSchema': {'type': 'object', 'properties': {'fromBlock': {'type': ['string', 'integer']}, 'toBlock': {'type': ['string', 'integer']}, 'address': {'type': 'string'}, 'topics': {'type': 'array'}}, 'required': ['fromBlock', 'toBlock']}},
     {'name': 'arc_balance', 'description': 'Native USDC balance (18 decimals) of an Arc address. $0.002 USDC.',
      'inputSchema': {'type': 'object', 'properties': {'address': {'type': 'string'}}, 'required': ['address']}},
-    {'name': 'arc_free', 'description': 'Free-tier call (50/day, no payment). method+params = raw JSON-RPC.',
+    {'name': 'arc_free', 'description': 'Free-tier call on Arc (50/day, no payment). method+params = raw JSON-RPC.',
+     'inputSchema': {'type': 'object', 'properties': {'method': {'type': 'string'}, 'params': {'type': 'array'}}, 'required': ['method']}},
+    {'name': 'base_block_number', 'description': 'Latest Base mainnet block number (chainId 8453, ETH gas). $0.002 USDC. percall is the keyless pay-per-call RPC on Base: no API key, USDC per call.',
+     'inputSchema': {'type': 'object', 'properties': {}}},
+    {'name': 'base_call', 'description': 'eth_call on Base (simulate contract read). $0.003 USDC.',
+     'inputSchema': {'type': 'object', 'properties': {'to': {'type': 'string'}, 'data': {'type': 'string'}}, 'required': ['to']}},
+    {'name': 'base_get_transaction_receipt', 'description': 'Base transaction receipt (status/logs/gas). $0.003 USDC.',
+     'inputSchema': {'type': 'object', 'properties': {'hash': {'type': 'string'}}, 'required': ['hash']}},
+    {'name': 'base_get_logs', 'description': 'eth_getLogs on Base (filter by address/topics/block range). $0.005 USDC.',
+     'inputSchema': {'type': 'object', 'properties': {'fromBlock': {'type': ['string', 'integer']}, 'toBlock': {'type': ['string', 'integer']}, 'address': {'type': 'string'}, 'topics': {'type': 'array'}}, 'required': ['fromBlock', 'toBlock']}},
+    {'name': 'base_balance', 'description': 'ETH balance of a Base address (wei). $0.002 USDC.',
+     'inputSchema': {'type': 'object', 'properties': {'address': {'type': 'string'}}, 'required': ['address']}},
+    {'name': 'base_free', 'description': 'Free-tier call on Base (50/day, no payment). method+params = raw JSON-RPC.',
      'inputSchema': {'type': 'object', 'properties': {'method': {'type': 'string'}, 'params': {'type': 'array'}}, 'required': ['method']}},
     {'name': 'arc_early_watch', 'description': 'Monitoring snapshot. $0.01 USDC (free tier first): latest Arc block + its transactions; optional `address` + `window` (10-300s) to list USDC flows touching that address in the window. Use for activity watching.',
      'inputSchema': {'type': 'object', 'properties': {'address': {'type': 'string', 'description': '0x address to watch'}, 'window': {'type': 'integer', 'description': 'watch window seconds (10-300)'}}}},
@@ -170,6 +180,12 @@ TOOLS = [
      'inputSchema': {'type': 'object', 'properties': {'address': {'type': 'string', 'description': '0x address'}, 'window': {'type': 'integer', 'description': 'window seconds (60-86400, default 86400)'}}, 'required': ['address']}},
     {'name': 'arc_token_report', 'description': 'Full token report. $0.05 USDC (free tier first): everything in arc_audit plus top-10 recipient holders and flow concentration (top10 share).',
      'inputSchema': {'type': 'object', 'properties': {'address': {'type': 'string', 'description': 'token contract 0x..'}}, 'required': ['address']}},
+    {'name': 'token_score', 'description': 'Model score for one token: S (signal strength) / T (timing) / rug (rug probability) + verdict (strong/watch/neutral/risky) + hours_since_listing. $0.01 USDC (free tier first). Universe = trending memecoins (solana/base/bsc/arc), refreshed ~10 min; found:false when the token is not in the universe.',
+     'inputSchema': {'type': 'object', 'properties': {'address': {'type': 'string', 'description': 'token address (0x.. on evm, base58 on solana)'}, 'chain': {'type': 'string', 'enum': ['solana', 'base', 'bsc', 'arc'], 'description': 'token chain'}}, 'required': ['address']}},
+    {'name': 'token_price', 'description': 'Live USD price for any token from its top pool: price_usd + 1h/6h/24h change + 24h volume + pool liquidity. $0.005 USDC (free tier first). chain auto-detected when omitted; built for 30-60s polling.',
+     'inputSchema': {'type': 'object', 'properties': {'address': {'type': 'string', 'description': 'token address'}, 'chain': {'type': 'string', 'enum': ['base', 'bsc', 'solana', 'arc']}}, 'required': ['address']}},
+    {'name': 'trending_memes', 'description': 'Trending memecoins per chain (GMGN: price, 1h/24h change, volume, liquidity, market cap) joined with live model scores S/T/rug where available. $0.01 USDC (free tier first). ?chain=solana|base|bsc|arc|all, limit 1-200 (default 50).',
+     'inputSchema': {'type': 'object', 'properties': {'chain': {'type': 'string', 'enum': ['solana', 'base', 'bsc', 'arc', 'all'], 'description': 'default all'}, 'limit': {'type': 'integer', 'description': '1-200, default 50'}}}},
 ]
 
 def tool_call(name, args):
@@ -193,6 +209,24 @@ def tool_call(name, args):
             r = _call_x402('eth_getBalance', [args['address'], 'latest'])
         elif name == 'arc_free':
             r = _call_x402(args['method'], args.get('params', []), free=True)
+        elif name == 'base_block_number':
+            r = _call_x402('eth_blockNumber', [], chain='base')
+        elif name == 'base_call':
+            p = {'to': args['to'], 'data': args.get('data', '0x')}
+            r = _call_x402('eth_call', [p, 'latest'], chain='base')
+        elif name == 'base_get_transaction_receipt':
+            r = _call_x402('eth_getTransactionReceipt', [args['hash']], chain='base')
+        elif name == 'base_get_logs':
+            q = {'fromBlock': str(args['fromBlock']), 'toBlock': str(args['toBlock'])}
+            if args.get('address'):
+                q['address'] = args['address']
+            if args.get('topics') is not None:
+                q['topics'] = args['topics']
+            r = _call_x402('eth_getLogs', [q], chain='base')
+        elif name == 'base_balance':
+            r = _call_x402('eth_getBalance', [args['address'], 'latest'], chain='base')
+        elif name == 'base_free':
+            r = _call_x402(args['method'], args.get('params', []), free=True, chain='base')
         elif name == 'arc_early_watch':
             p = {}
             if args.get('address'):
@@ -224,6 +258,23 @@ def tool_call(name, args):
             r = _data_call('/wallet-report', p)
         elif name == 'arc_token_report':
             r = _data_call('/token-report', {'address': args['address']})
+        elif name == 'token_score':
+            p = {'address': args['address']}
+            if args.get('chain'):
+                p['chain'] = str(args['chain'])
+            r = _data_call('/score', p)
+        elif name == 'token_price':
+            p = {'address': args['address']}
+            if args.get('chain'):
+                p['chain'] = str(args['chain'])
+            r = _data_call('/price', p)
+        elif name == 'trending_memes':
+            p = {}
+            if args.get('chain'):
+                p['chain'] = str(args['chain'])
+            if args.get('limit'):
+                p['limit'] = int(args['limit'])
+            r = _data_call('/meme', p)
         else:
             r = {'error': 'unknown tool ' + name}
         return [{'type': 'text', 'text': json.dumps(r)[:8000]}]
@@ -237,7 +288,7 @@ def handle(msg):
         return {'jsonrpc': '2.0', 'id': mid, 'result': {
             'protocolVersion': '2024-11-05',
             'capabilities': {'tools': {}},
-            'serverInfo': {'name': 'x402-arc-rpc', 'version': '1.0.0'}}}
+            'serverInfo': {'name': 'x402-percall', 'version': '1.1.0'}}}
     if m == 'notifications/initialized':
         return None
     if m == 'tools/list':

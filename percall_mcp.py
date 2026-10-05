@@ -194,6 +194,8 @@ TOOLS = [
      'inputSchema': {'type': 'object', 'properties': {'address': {'type': 'string', 'description': 'token address'}, 'chain': {'type': 'string', 'enum': ['base', 'bsc', 'solana', 'arc']}}, 'required': ['address']}},
     {'name': 'trending_memes', 'description': 'Trending memecoins per chain (GMGN: price, 1h/24h change, volume, liquidity, market cap) joined with live model scores S/T/rug where available. $0.01 USDC (free tier first). ?chain=solana|base|bsc|arc|all, limit 1-200 (default 50).',
      'inputSchema': {'type': 'object', 'properties': {'chain': {'type': 'string', 'enum': ['solana', 'base', 'bsc', 'arc', 'all'], 'description': 'default all'}, 'limit': {'type': 'integer', 'description': '1-200, default 50'}}}},
+    {'name': 'deployer_profile', 'description': 'Deployer profile (Arc D+0 radar). $0.02 USDC (free tier first): deployment count + contracts (with age) from the ~25h rolling buffer, first-seen age, d0 flag (fresh deployer = first deploy within last 10 min), wallet native balance + tx count. Use for early deployer tracking / D+0 token signals.',
+     'inputSchema': {'type': 'object', 'properties': {'deployer': {'type': 'string', 'description': 'deployer 0x address'}}, 'required': ['deployer']}},
 ]
 
 def tool_call(name, args):
@@ -283,6 +285,8 @@ def tool_call(name, args):
             if args.get('limit'):
                 p['limit'] = int(args['limit'])
             r = _data_call('/meme', p)
+        elif name == 'deployer_profile':
+            r = _data_call('/deployer', {'deployer': args['deployer']})
         else:
             r = {'error': 'unknown tool ' + name}
         return [{'type': 'text', 'text': json.dumps(r)[:8000]}]

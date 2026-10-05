@@ -22,6 +22,14 @@ except ImportError:
 
 ENDPOINT = os.environ.get('X402_MCP_URL', 'https://api.percall.io').rstrip('/')
 
+# chain configs (corresponds to network/asset in proxy 402 challenge)
+_CHAINS = {
+    'arc': {'path': '/arc/', 'chainId': 5042, 'version': '2',
+            'usdc': '0x3600000000000000000000000000000000000000'},
+    'base': {'path': '/base/', 'chainId': 8453, 'version': '1',
+             'usdc': '0x833589fCD6edb6e08f4c7C32D4f71b54Ba029135'},
+}
+
 def _load_key():
     k = os.environ.get('X402_MCP_KEY')
     if k:
